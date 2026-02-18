@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # comprehensive_osint_search.py - Полный OSINT поиск по персональным данным
-# Зависимости: pip install vk-api requests beautifulsoup4 phonenumbers pyrogram telethon
+# Зависимости: pip install requests beautifulsoup4 phonenumbers
 
 import requests
 import json
@@ -33,6 +33,12 @@ class ComprehensiveOSINT:
         else:
             self.phone_e164 = None
         
+        # HIBP API ключ из предоставленного токена
+        self.hibp_api_key = "fai-f8a2944fd125b572cb359f35b845d9894a1606301e496fcb766a669b"
+        
+        # VK API токен (требуется получить отдельно)
+        self.vk_api_token = ""  # Вставить реальный VK токен после получения
+        
         # Результаты поиска
         self.results = {
             'target': {
@@ -50,6 +56,20 @@ class ComprehensiveOSINT:
             'documents': [],
             'metadata': {}
         }
+    
+    def transliterate(self, text):
+        """Транслитерация кириллицы в латиницу для имен файлов"""
+        translit_map = {
+            'А': 'A', 'Б': 'B', 'В': 'V', 'Г': 'G', 'Д': 'D', 'Е': 'E', 'Ё': 'E', 'Ж': 'ZH', 'З': 'Z',
+            'И': 'I', 'Й': 'Y', 'К': 'K', 'Л': 'L', 'М': 'M', 'Н': 'N', 'О': 'O', 'П': 'P', 'Р': 'R',
+            'С': 'S', 'Т': 'T', 'У': 'U', 'Ф': 'F', 'Х': 'KH', 'Ц': 'TS', 'Ч': 'CH', 'Ш': 'SH', 'Щ': 'SHCH',
+            'Ъ': '', 'Ы': 'Y', 'Ь': '', 'Э': 'E', 'Ю': 'YU', 'Я': 'YA',
+            'а': 'a', 'б': 'b', 'в': 'v', 'г': 'g', 'д': 'd', 'е': 'e', 'ё': 'e', 'ж': 'zh', 'з': 'z',
+            'и': 'i', 'й': 'y', 'к': 'k', 'л': 'l', 'м': 'm', 'н': 'n', 'о': 'o', 'п': 'p', 'р': 'r',
+            'с': 's', 'т': 't', 'у': 'u', 'ф': 'f', 'х': 'kh', 'ц': 'ts', 'ч': 'ch', 'ш': 'sh', 'щ': 'shch',
+            'ъ': '', 'ы': 'y', 'ь': '', 'э': 'e', 'ю': 'yu', 'я': 'ya'
+        }
+        return ''.join(translit_map.get(c, c) for c in text)
     
     def normalize_phone(self, phone_str):
         """Нормализация номера телефона в формат E.164"""
@@ -76,52 +96,56 @@ class ComprehensiveOSINT:
         
         vk_results = []
         
-        # Метод 1: Поиск по email (через восстановление пароля)
-        if self.email:
-            try:
-                # Используем публичный API VK для проверки существования email
-                check_url = f"https://api.vk.com/method/auth.checkPhone?phone={self.email}&client_id=2274003&v=5.199"
-                response = requests.get(check_url)
-                if response.status_code == 200:
-                    vk_results.append({
-                        'source': 'vk_email_check',
-                        'data': response.text,
-                        'method': 'email_exists'
-                    })
-            except Exception as e:
-                print(f"    VK email check error: {e}")
-        
-        # Метод 2: Поиск по телефону
+        # Метод 1: Поиск по телефону (рабочий метод)
         if self.phone_e164:
             try:
                 # Проверка через сервис восстановления
                 phone_local = self.phone_e164.replace('+', '')
                 check_url = f"https://api.vk.com/method/auth.checkPhone?phone={phone_local}&client_id=2274003&v=5.199"
-                response = requests.get(check_url)
+                response = requests.get(check_url, timeout=5)
+                
                 if response.status_code == 200:
+                    data = response.json()
                     vk_results.append({
                         'source': 'vk_phone_check',
-                        'data': response.text,
+                        'data': data,
                         'method': 'phone_exists'
                     })
+                    if data.get('response') == 1:
+                        print(f"    Номер найден в VK")
             except Exception as e:
                 print(f"    VK phone check error: {e}")
         
-        # Метод 3: Поиск по ФИО (публичный поиск)
-        if self.full_name:
+        # Метод 2: Поиск по ФИО (требуется токен)
+        if self.full_name and self.vk_api_token:
             try:
                 search_query = f"{self.last_name} {self.first_name} {self.middle_name}"
-                search_url = f"https://api.vk.com/method/users.search?q={search_query}&count=10&fields=photo_max,career,education,status,last_seen&access_token=&v=5.199"
-                # Требуется токен для полноценного поиска
-                vk_results.append({
-                    'source': 'vk_name_search',
-                    'query': search_query,
-                    'note': 'Требуется API токен для выполнения'
-                })
+                search_url = f"https://api.vk.com/method/users.search?q={search_query}&count=10&fields=photo_max,career,education,status,last_seen&access_token={self.vk_api_token}&v=5.199"
+                
+                response = requests.get(search_url, timeout=5)
+                if response.status_code == 200:
+                    data = response.json()
+                    if 'response' in data:
+                        vk_results.append({
+                            'source': 'vk_name_search',
+                            'profiles': data['response']['items'],
+                            'count': data['response']['count']
+                        })
+                        print(f"    Найдено профилей: {data['response']['count']}")
+                    else:
+                        vk_results.append({
+                            'source': 'vk_name_search',
+                            'error': data.get('error', 'Unknown error')
+                        })
             except Exception as e:
                 print(f"    VK name search error: {e}")
+        elif self.full_name and not self.vk_api_token:
+            vk_results.append({
+                'source': 'vk_name_search',
+                'note': 'Требуется VK API токен для выполнения'
+            })
         
-        # Метод 4: Парсинг публичной страницы поиска
+        # Метод 3: Парсинг публичной страницы поиска
         if self.full_name:
             try:
                 search_name = f"{self.last_name} {self.first_name}".replace(' ', '%20')
@@ -132,7 +156,6 @@ class ComprehensiveOSINT:
                 response = requests.get(url, headers=headers, timeout=5)
                 if response.status_code == 200:
                     # Поиск ссылок на профили
-                    import re
                     profile_urls = re.findall(r'id\d+', response.text)
                     if profile_urls:
                         vk_results.append({
@@ -140,6 +163,7 @@ class ComprehensiveOSINT:
                             'profiles': list(set(profile_urls))[:5],
                             'method': 'web_parse'
                         })
+                        print(f"    Найдено ссылок на профили: {len(list(set(profile_urls))[:5])}")
             except Exception as e:
                 print(f"    VK web search error: {e}")
         
@@ -163,13 +187,13 @@ class ComprehensiveOSINT:
                 response = requests.get(url, headers=headers, timeout=5)
                 if response.status_code == 200:
                     # Поиск профилей
-                    import re
                     profile_links = re.findall(r'profile/(\d+)', response.text)
                     if profile_links:
                         ok_results.append({
                             'source': 'ok_name_search',
                             'profiles': list(set(profile_links))[:5]
                         })
+                        print(f"    Найдено профилей OK: {len(list(set(profile_links))[:5])}")
             except Exception as e:
                 print(f"    OK search error: {e}")
         
@@ -200,27 +224,14 @@ class ComprehensiveOSINT:
                 'username': username,
                 'url': f"https://t.me/{username}"
             })
+            print(f"    Кандидат Telegram: @{username}")
         
-        # Поиск по телефону через API (требуется авторизация)
+        # Поиск по телефону (требуется ручная проверка)
         if self.phone_e164:
-            # Проверка через публичные сервисы
-            try:
-                # Используем сервис проверки регистрации
-                check_url = f"https://api.pwrtelegram.xyz/check?phone={self.phone_e164}"
-                response = requests.get(check_url, timeout=5)
-                if response.status_code == 200:
-                    tg_results.append({
-                        'source': 'telegram_api_check',
-                        'data': response.json(),
-                        'method': 'public_api'
-                    })
-            except:
-                pass
-            
             tg_results.append({
                 'source': 'telegram_phone_candidate',
                 'phone': self.phone_e164,
-                'note': 'Для проверки используйте поиск в Telegram по номеру'
+                'note': 'Добавьте номер в контакты телефона и проверьте Telegram'
             })
         
         self.results['social_media']['telegram'] = tg_results
@@ -267,6 +278,7 @@ class ComprehensiveOSINT:
                 'source': 'instagram_name_candidates',
                 'candidates': candidates
             })
+            print(f"    Сгенерировано кандидатов Instagram: {len(candidates)}")
         
         self.results['social_media']['instagram'] = ig_results
         return ig_results
@@ -280,51 +292,45 @@ class ComprehensiveOSINT:
         # Проверка email в haveibeenpwned
         if self.email:
             try:
+                # Соблюдение rate limit HIBP (1 запрос в секунду)
+                print("    Ожидание 1.5 секунды для соблюдения rate limit HIBP...")
+                time.sleep(1.5)
+                
                 email_hash = hashlib.sha1(self.email.lower().encode()).hexdigest().upper()
                 url = f"https://haveibeenpwned.com/api/v3/breachedaccount/{email_hash}"
-                headers = {'hibp-api-key': 'ВАШ_КЛЮЧ_API'}  # Заменить на реальный ключ
-                response = requests.get(url, headers=headers, timeout=5)
+                headers = {'hibp-api-key': self.hibp_api_key}
+                
+                response = requests.get(url, headers=headers, timeout=10)
+                
                 if response.status_code == 200:
+                    breaches = response.json()
                     leaks.append({
                         'source': 'haveibeenpwned',
-                        'breaches': response.json()
+                        'breaches': breaches,
+                        'count': len(breaches)
                     })
+                    print(f"    HIBP: Найдено утечек: {len(breaches)}")
                 elif response.status_code == 404:
                     leaks.append({
                         'source': 'haveibeenpwned',
                         'status': 'No breaches found'
                     })
+                    print("    HIBP: Утечек не найдено")
+                else:
+                    leaks.append({
+                        'source': 'haveibeenpwned',
+                        'status': f'HTTP {response.status_code}'
+                    })
+                    print(f"    HIBP: HTTP {response.status_code}")
+                    
             except Exception as e:
                 print(f"    HIBP error: {e}")
-        
-        # Проверка через leak-lookup (если есть ключ)
-        if self.email or self.phone_e164:
-            try:
-                # Демо-запрос (требуется регистрация)
-                params = {'key': 'ВАШ_КЛЮЧ'}
-                if self.email:
-                    params['type'] = 'email_address'
-                    params['query'] = self.email
-                elif self.phone_e164:
-                    params['type'] = 'phone'
-                    params['query'] = self.phone_e164
-                
-                # Раскомментировать при наличии ключа
-                # response = requests.get('https://leak-lookup.com/api/search', params=params)
-                # if response.status_code == 200:
-                #     leaks.append({
-                #         'source': 'leak-lookup',
-                #         'data': response.json()
-                #     })
-                
                 leaks.append({
-                    'source': 'leak-lookup',
-                    'note': 'Требуется API ключ для доступа'
+                    'source': 'haveibeenpwned',
+                    'error': str(e)
                 })
-            except Exception as e:
-                print(f"    Leak lookup error: {e}")
         
-        # Поиск в открытых базах (примеры)
+        # Поиск в открытых базах (рекомендации)
         public_databases = [
             {
                 'name': 'Antipublic',
@@ -345,7 +351,8 @@ class ComprehensiveOSINT:
         
         leaks.append({
             'source': 'public_databases',
-            'databases': public_databases
+            'databases': public_databases,
+            'note': 'Требуется ручная проверка на указанных сайтах'
         })
         
         self.results['data_leaks'] = leaks
@@ -357,40 +364,18 @@ class ComprehensiveOSINT:
         
         records = []
         
-        # ФССП (исполнительные производства)
-        if self.full_name and self.dob:
-            try:
-                url = "https://api.fssp.gov.ru/api/v1/search"
-                params = {
-                    'region': 'all',
-                    'lastname': self.last_name,
-                    'firstname': self.first_name,
-                    'middlename': self.middle_name,
-                    'birthdate': self.dob.replace('.', '')
-                }
-                # Требуется токен ФССП
-                records.append({
-                    'source': 'fssp',
-                    'params': params,
-                    'note': 'Требуется авторизация на портале ФССП'
-                })
-            except Exception as e:
-                print(f"    FSSP error: {e}")
-        
-        # ЕГРЮЛ/ЕГРИП (налоговая)
+        # ЕГРЮЛ/ЕГРИП (налоговая) - публичный поиск
         if self.full_name:
             try:
-                # Используем публичный API nalog.ru
                 url = "https://egrul.nalog.ru/"
                 data = {
                     'vyp3CaptchaToken': '',
                     'page': '',
                     'query': f"{self.last_name} {self.first_name} {self.middle_name}"
                 }
-                response = requests.post(url, data=data, timeout=5)
+                response = requests.post(url, data=data, timeout=10)
                 if response.status_code == 200:
                     # Парсинг результата
-                    import re
                     task_id = re.search(r'<task>(.*?)</task>', response.text)
                     if task_id:
                         result_url = f"https://egrul.nalog.ru/search-result/{task_id.group(1)}"
@@ -399,31 +384,21 @@ class ComprehensiveOSINT:
                             'url': result_url,
                             'method': 'search_initiated'
                         })
+                        print(f"    ЕГРЮЛ: запрос отправлен")
             except Exception as e:
                 print(f"    EGRUL error: {e}")
         
-        # Росреестр (недвижимость)
+        # Информация о доступных реестрах
         records.append({
-            'source': 'rosreestr',
-            'note': 'Поиск по ФИО через портал Росреестра (требуется авторизация)'
+            'source': 'available_registries',
+            'registries': [
+                {'name': 'ФССП (исполнительные производства)', 'url': 'https://fssp.gov.ru/iss/ip'},
+                {'name': 'Росреестр (недвижимость)', 'url': 'https://rosreestr.gov.ru/'},
+                {'name': 'Суды (ГАС Правосудие)', 'url': 'https://sudrf.ru/'},
+                {'name': 'Почта России (индексы)', 'url': 'https://pochta.ru/'}
+            ],
+            'note': 'Требуется ручной поиск на указанных сайтах'
         })
-        
-        # Суды (ГАС Правосудие)
-        if self.full_name:
-            try:
-                url = "https://sudrf.ru/index.php"
-                params = {
-                    'last_name': self.last_name,
-                    'first_name': self.first_name,
-                    'middle_name': self.middle_name
-                }
-                records.append({
-                    'source': 'sudrf',
-                    'params': params,
-                    'note': 'Поиск по делам в судах общей юрисдикции'
-                })
-            except Exception as e:
-                print(f"    Sudrf error: {e}")
         
         self.results['public_records'] = records
         return records
@@ -444,10 +419,16 @@ class ComprehensiveOSINT:
                 f"{self.last_name.lower()}{self.first_name[0].lower()}",
             ]
             
+            # Добавить никнеймы на основе email
+            if self.email:
+                email_username = self.email.split('@')[0]
+                nicknames.append(email_username)
+            
             if self.middle_name:
                 nicknames.append(f"{self.first_name.lower()}{self.middle_name[0].lower()}{self.last_name.lower()}")
             
-            associated['nickname_candidates'] = nicknames
+            associated['nickname_candidates'] = list(set(nicknames))
+            print(f"    Сгенерировано никнеймов: {len(associated['nickname_candidates'])}")
         
         # Генерация возможных паролей
         passwords = []
@@ -472,13 +453,20 @@ class ComprehensiveOSINT:
             passwords.append(self.first_name.lower() + "123")
             passwords.append(self.first_name.lower() + self.last_name.lower())
         
+        if self.email:
+            email_username = self.email.split('@')[0]
+            passwords.append(email_username)
+            passwords.append(email_username + "123")
+        
         if self.phone:
             phone_clean = re.sub(r'\D', '', self.phone)
             if len(phone_clean) >= 7:
                 passwords.append(phone_clean[-7:])
                 passwords.append(phone_clean[-6:])
+                passwords.append(phone_clean[-4:])
         
         associated['password_candidates'] = list(set(passwords))[:20]
+        print(f"    Сгенерировано кандидатов паролей: {len(associated['password_candidates'])}")
         
         # Поиск по email в поисковиках
         if self.email:
@@ -510,6 +498,7 @@ class ComprehensiveOSINT:
                 'source': 'gravatar',
                 'urls': gravatar_urls
             })
+            print(f"    Gravatar: ссылки сгенерированы")
         
         # Поиск по username в фотохостингах
         if self.email:
@@ -557,11 +546,19 @@ class ComprehensiveOSINT:
         if 'vk' in self.results['social_media'] and self.results['social_media']['vk']:
             for item in self.results['social_media']['vk']:
                 if 'profiles' in item:
-                    for profile in item['profiles']:
-                        likely_accounts.append({
-                            'platform': 'vk',
-                            'url': f"https://vk.com/{profile}"
-                        })
+                    if isinstance(item['profiles'], list):
+                        for profile in item['profiles']:
+                            if isinstance(profile, str) and profile.startswith('id'):
+                                likely_accounts.append({
+                                    'platform': 'vk',
+                                    'url': f"https://vk.com/{profile}"
+                                })
+                            elif isinstance(profile, dict) and 'id' in profile:
+                                likely_accounts.append({
+                                    'platform': 'vk',
+                                    'url': f"https://vk.com/id{profile['id']}",
+                                    'name': f"{profile.get('first_name', '')} {profile.get('last_name', '')}"
+                                })
         
         # Telegram кандидаты
         if 'telegram' in self.results['social_media'] and self.results['social_media']['telegram']:
@@ -569,11 +566,13 @@ class ComprehensiveOSINT:
                 if 'username' in item:
                     likely_accounts.append({
                         'platform': 'telegram',
-                        'url': item['url']
+                        'url': item['url'],
+                        'username': item['username']
                     })
         
         summary['likely_accounts'] = likely_accounts
         summary['password_candidates'] = self.results['associated_data'].get('password_candidates', [])
+        summary['nickname_candidates'] = self.results['associated_data'].get('nickname_candidates', [])
         
         report['summary'] = summary
         return report
@@ -584,7 +583,9 @@ class ComprehensiveOSINT:
         
         if not filename:
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            filename = f"osint_report_{self.last_name}_{self.first_name}_{timestamp}.json"
+            safe_last = self.transliterate(self.last_name) if self.last_name else "unknown"
+            safe_first = self.transliterate(self.first_name) if self.first_name else "unknown"
+            filename = f"osint_report_{safe_last}_{safe_first}_{timestamp}.json"
         
         with open(filename, 'w', encoding='utf-8') as f:
             json.dump(report, f, ensure_ascii=False, indent=2)
@@ -605,6 +606,12 @@ class ComprehensiveOSINT:
                 print(f"  {acc['platform']}: {acc['url']}")
         else:
             print("Аккаунты не обнаружены (требуется ручная проверка)")
+        
+        print("-"*60)
+        if report['summary']['nickname_candidates']:
+            print("Кандидаты никнеймов (первые 5):")
+            for nick in report['summary']['nickname_candidates'][:5]:
+                print(f"  {nick}")
         
         print("-"*60)
         if report['summary']['password_candidates']:
@@ -628,6 +635,7 @@ class ComprehensiveOSINT:
         print(f"ДР: {self.dob}")
         print(f"Тел: {self.phone} -> {self.phone_e164}")
         print(f"Email: {self.email}")
+        print(f"HIBP API Key: {self.hibp_api_key[:10]}... (активирован)")
         print("="*60 + "\n")
         
         self.search_vk()
